@@ -1,69 +1,134 @@
 from socket import *
 import time
 import config
+import os
 
-class Connection_Start:
+class Server_Info:
+    def __init__(self, name, address):
+        self.name = name
+        self.address = address
+    # Compares objects for values inside, not a literal comparison
+    def __eq__(self, other):
+        return self.__dict__ == other.__dict__
+
+class File_Transfer:
+    def __init__(self, directory):
+        # if \Example, add exact path 
+        if directory.startswith("\\"):
+            directory = os.path.dirname(os.path.realpath(__file__)) + directory
+        self.directory = directory
+
+        # Create folder
+        if not os.path.exists(directory):
+            os.makedirs(directory)
+    
+    def get_files(self):
+        files = []
+        for filename in os.listdir(self.directory):
+            try:
+                files.append(open(self.directory+"\\"+filename, "rb"))
+            except PermissionError:
+                pass
+        return files
+
+class Connection:
     def __init__(self, port):
         self.port = port
-        self.broadcast_msg = 'broadcast'
-        self.connect_msg   = 'connect'
+        self.BROADCAST_INIT = 'broadcast'
+        self.CONNECTED      = 'connected'
+
+        ''' Sending Socket '''
+        self.send_sock = socket(AF_INET, SOCK_DGRAM)
+        self.send_sock.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)
+        self.send_sock.setsockopt(SOL_SOCKET, SO_BROADCAST, 1)
+        self.send_sock.settimeout(5.0)
     
     def host(self):
-        ''' Scan Global Sockets '''
+        ''' Host Global Socket '''
         sock = socket(AF_INET, SOCK_DGRAM)
         sock.bind(('', self.port))
         found_clients = []
+        ft = File_Transfer(config.HOST_DIR)
+
+        print("Server Started...")
 
         while True:
-            data, address = sock.recvfrom(4096)
+            data, address = sock.recvfrom(1024)
             data = str(data.decode('UTF-8'))
 
-            # Respond to client            
-            if data == self.broadcast_msg:
+            # Provide server infomation            
+            if data == self.BROADCAST_INIT:
                 responce = 'res:' + config.SERVER_NAME
                 sent = sock.sendto(responce.encode(), address)
                 if str(address) not in found_clients:
-                    print(str(address) + " - Gave server info")
+                    print("Gave " + str(address) + " server details")
                     found_clients.append(str(address))
 
-            # Connect to client
-            if data == self.connect_msg:
-                responce = 'res:yes'
-                sent = sock.sendto(responce.encode(), address)
+            # Return Public Folder Content
+            if data == self.CONNECTED:
+                files = ft.get_files()
+                if len(files) < 1: sent = sock.sendto(self.CONNECTED.encode(), address) # No files to send
+                else:
+                    for f in files:
+                        print("Sending: " + f.name)
+                        sock.sendto(("file:" + os.path.basename(f.name)).encode(), address)
+                        l = f.read(1024)
+                        while (l):
+                            sock.sendto(l, address)
+                            l = f.read(1024)
+                        f.close()
+                        sock.sendto(("end").encode(), address)
+                    
                 
     def search(self):
-        ''' Start Global Socket '''
-        sock = socket(AF_INET, SOCK_DGRAM)
-        sock.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)
-        sock.setsockopt(SOL_SOCKET, SO_BROADCAST, 1)
+        ''' Find Global Servers'''
         server_address = ('255.255.255.255', self.port)
-
         servers = []
+        search_interval = 5
         start_time = time.time()
-
-        print('Searching for File Servers...')
-        try:
-            while time.time() < start_time + 5:
-                # Query
-                sent = sock.sendto(self.broadcast_msg.encode(), server_address)
-                data, server = sock.recvfrom(4096)
-                if data.decode('UTF-8').startswith('res:') and str(server[0]) not in servers:
-                    print('Found Server at: ' + str(server[0]))
-                    servers.append(str(server[0]))
-        finally:	
-                sock.close()
+        while time.time() < (start_time + search_interval):
+            # Query for servers - ask network for information
+            sent = self.send_sock.sendto(self.BROADCAST_INIT.encode(), server_address)
+            data, server = self.send_sock.recvfrom(1024)
+            data = data.decode('UTF-8')
+            if data.startswith('res:') and Server_Info(data[4:], server) not in servers:
+                servers.append(Server_Info(data[4:], server[0]))
         return servers
 
-    def connect(self, address):
-        sock = socket(AF_INET, SOCK_DGRAM)
-        sock.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)
-        sock.setsockopt(SOL_SOCKET, SO_BROADCAST, 1)
-        server_address = (address, config.PORT)
-        
+    def connect(self, ip):
+        ''' Establish a Connection to Server '''
+        directory = config.CLIENT_DIR
+        # if \Example, add exact path 
+        if directory.startswith("\\"):
+            directory = os.path.dirname(os.path.realpath(__file__)) + directory
+        # Create Container Folder
+        if not os.path.exists(directory):
+            os.makedirs(directory)
+        print("Connecting")
         while True:
-            sent = sock.sendto(self.connect_msg.encode(), server_address)
-            data, server = sock.recvfrom(4096)
-            print(data.decode('UTF-8'))
+            sent = self.send_sock.sendto(self.CONNECTED.encode(), (ip, self.port))
+            data = self.send_sock.recv(1024)
+            command = data.decode('UTF-8')
+
+            # Idle
+            if command == self.CONNECTED:
+                print("idle")
+
+            # Receiving File!
+            if command.startswith('file:'):
+                print("Receiving...")
+                data = self.send_sock.recv(1024)
+                f = open(directory+"\\"+command[5:],'wb')
+                i = 0
+                while data:
+                    try:
+                        if data.decode('UTF-8') == "end":
+                            break
+                    except Exception:
+                        pass
+                    f.write(data)
+                    data = self.send_sock.recv(1024)
+                f.close()
+
             
-    
-con = Connection_Start(config.PORT)
+con = Connection(config.PORT)
