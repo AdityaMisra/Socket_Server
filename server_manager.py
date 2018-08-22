@@ -28,21 +28,26 @@ class File_Transfer:
 
     @staticmethod
     def file_hash(file_dir):
+        # Get file as a Hash (unique identifier)
         hash_md5 = hashlib.md5()
-        
-        with open(file_dir, "rb") as f:
-            for chunk in iter(lambda: f.read(4096), b""):
-                hash_md5.update(chunk)
+        try:
+            with open(file_dir, "rb") as f:
+                for chunk in iter(lambda: f.read(4096), b""):
+                    hash_md5.update(chunk)
+        # File can be deleted during this (possibly causing OS/Perm error)
+        except FileNotFoundError and OSError and PermissionError:
+            return None
         return hash_md5.hexdigest()
 
     def get_files_for_sending(self):
         files = []
         new_hashs = []
+        # Get all files in Container folder
         for filename in os.listdir(self.directory):
             hash_ = File_Transfer.file_hash(self.directory+"\\"+filename)
-            new_hashs.append(hash_)
+            if hash_ != None: new_hashs.append(hash_)
             # New File
-            if hash_ not in self.file_history:
+            if hash_ not in self.file_history and hash_ != None:
                  files.append(open(self.directory+"\\"+filename, "rb"))   
         for item in self.file_history:
             # Remove file
@@ -55,9 +60,8 @@ class File_Transfer:
 class Connection:
     def __init__(self, port):
         self.port = port
-        self.last_time = time.time()
-        self.BROADCAST_INIT = 'broadcast'
-        self.CONNECTED      = 'connected'
+        self.BROADCAST_INIT = '*'
+        self.CONNECTED      = '&'
         
         ''' Sending Socket '''
         self.send_sock = socket(AF_INET, SOCK_DGRAM)
@@ -73,7 +77,6 @@ class Connection:
         ft = File_Transfer(config.HOST_DIR)
 
         print("Server Started...")
-        output_interval = time.time()
     
         while True:
             data, address = sock.recvfrom(1024)
@@ -91,11 +94,6 @@ class Connection:
             if data == self.CONNECTED:
                 files = ft.get_files_for_sending()
                 file_amount = len(files)
-                
-                # Display output every 4 seconds
-                '''if time.time() > (output_interval + 4):
-                    print(str(address) + " - serving files (" + str(file_amount) + ")")
-                    output_interval = time.time()'''
 
                 # Request Deletes
                 for dfile in ft.hash_to_remove:
@@ -107,21 +105,24 @@ class Connection:
                 else:
                     # Send Files
                     for f in files:
+                        print("Serving " + address[0] + " - " + f.name)
                         sock.sendto(("file:" + os.path.basename(f.name)).encode(), address)
                         l = f.read(1024)
                         while (l):
                             sock.sendto(l, address)
                             l = f.read(1024)
-                        f.close()
                         sock.sendto(("end").encode(), address)
-                    
-                
+                        f.close() 
+                        
     def search(self):
         ''' Find Global Servers'''
+        print("*Searching for servers*")
         server_address = ('255.255.255.255', self.port)
         servers = []
-        search_interval = 5
+        search_interval = 2
         start_time = time.time()
+
+        # Search as long as interval
         while time.time() < (start_time + search_interval):
             # Query for servers - ask network for information
             sent = self.send_sock.sendto(self.BROADCAST_INIT.encode(), server_address)
@@ -129,18 +130,18 @@ class Connection:
             data = data.decode('UTF-8')
             if data.startswith('res:') and Server_Info(data[4:], server[0]) not in servers:
                 servers.append(Server_Info(data[4:], server[0]))
+                print("\t" + str(len(servers)) + " server/s found.")
+        print("")
         return servers
 
     def clean_up(self, directory):
         # Clear files
-        if time.time() > (self.last_time + 7):
-            print("Purging - " + directory)
-            try:
-                for filename in os.listdir(directory):
-                    os.remove(directory+"\\"+filename)
-            except Exception:
-                pass
-            self.last_time = time.time()
+        print("Purging - " + directory)
+        try:
+            for filename in os.listdir(directory):
+                os.remove(directory+"\\"+filename)
+        except Exception:
+            pass
 
     def connect(self, ip):
         ''' Establish a Connection to Server '''
@@ -152,23 +153,27 @@ class Connection:
         # Create Container Folder
         if not os.path.exists(directory):
             os.makedirs(directory)
+        # Clear Folder
+        else:
+            self.clean_up(directory)
 
+        # Initialise Connection
         while True:
             
+            # Talk to server
             sent = self.send_sock.sendto(self.CONNECTED.encode(), (ip, self.port))
             data = self.send_sock.recv(1024)
             command = data.decode('UTF-8')
 
             # Idle
             if command == self.CONNECTED:
-                print("idle")
+                pass
 
             # Receiving File!
             elif command.startswith('file:'):
-                print("recieving data")
                 data = self.send_sock.recv(1024)
+                print("Receiving file: " + command[5:])
                 f = open(directory+"\\"+command[5:],'wb')
-                i = 0
                 while data:
                     try:
                         if data.decode('UTF-8') == "end":
@@ -179,14 +184,17 @@ class Connection:
                     data = self.send_sock.recv(1024)
                 f.close()
 
+            # File deleted on server
             elif command.startswith('del:'):
                 print("Delete Request")
-                for filename in os.listdir(self.directory):
+                for filename in os.listdir(directory):
                     if File_Transfer.file_hash(self.directory+"\\"+filename) == command[4:]:
                         try:
                             os.remove(directory+"\\"+command[4:])
                         except Exception:
                             pass
+
+            # Hmmm?
             else:
                 print("Wtf:" + command)
 
