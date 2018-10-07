@@ -1,10 +1,15 @@
 from socket import *
+from colorama import init, Fore
 import time
 import config
 import os
 import hashlib
 
-class Server_Info:
+
+init(autoreset=True)
+
+
+class ServerInfo:
     def __init__(self, name, address):
         self.name = name
         self.address = address
@@ -12,7 +17,8 @@ class Server_Info:
     def __eq__(self, other):
         return self.__dict__ == other.__dict__
 
-class File_Transfer:
+
+class FileTransfer:
     def __init__(self, directory):
         # if \Example, add exact path 
         if directory.startswith("\\"):
@@ -44,11 +50,12 @@ class File_Transfer:
         new_hashs = []
         # Get all files in Container folder
         for filename in os.listdir(self.directory):
-            hash_ = File_Transfer.file_hash(self.directory+"\\"+filename)
-            if hash_ != None: new_hashs.append(hash_)
+            hash_ = FileTransfer.file_hash(self.directory + "\\" + filename)
+            if hash_:
+                new_hashs.append(hash_)
             # New File
-            if hash_ not in self.file_history and hash_ != None:
-                 files.append(open(self.directory+"\\"+filename, "rb"))   
+            if hash_ and hash_ not in self.file_history:
+                 files.append(open(self.directory+"\\"+filename, "rb"))
         for item in self.file_history:
             # Remove file
             if item not in new_hashs:
@@ -57,7 +64,22 @@ class File_Transfer:
         self.file_history = new_hashs
         return files
 
+
 class Connection:
+    CONNECTING = 'CONNECTING'
+    IDLE = 'IDLE'
+    RECEIVING = 'RECEIVING'
+    DELETING = 'DELETING'
+    ERROR = 'ERROR'
+
+    status_color_mapping = {
+        CONNECTING: Fore.LIGHTBLUE_EX,
+        IDLE: Fore.YELLOW,
+        RECEIVING: Fore.LIGHTGREEN_EX,
+        DELETING: Fore.RED,
+        ERROR: Fore.LIGHTRED_EX
+    }
+
     def __init__(self, port):
         self.port = port
         self.BROADCAST_INIT = '*'
@@ -70,24 +92,29 @@ class Connection:
         self.send_sock.settimeout(5.0)
     
     def host(self):
-        ''' Host Global Socket '''
+        """
+        Host Global Socket
+        :return:
+        """
+
         sock = socket(AF_INET, SOCK_DGRAM)
         sock.bind(('', self.port))
         found_clients = []
-        ft = File_Transfer(config.HOST_DIR)
+        ft = FileTransfer(config.HOST_DIR)
 
-        print("Server Started...")
+        print(Fore.LIGHTGREEN_EX + "Server Started...")
     
         while True:
             data, address = sock.recvfrom(1024)
             data = str(data.decode('UTF-8'))
 
-            # Provide server infomation            
+            # Provide server information
             if data == self.BROADCAST_INIT:
-                responce = 'res:' + config.SERVER_NAME
-                sent = sock.sendto(responce.encode(), address)
+                response = 'res:' + config.SERVER_NAME
+                sent_count = sock.sendto(response.encode(), address)
+
                 if str(address) not in found_clients:
-                    print(str(address) + " - requested server details")
+                    print(Fore.YELLOW + str(address) + Fore.LIGHTBLUE_EX +" - requested server details")
                     found_clients.append(str(address))
 
             # Return Public Folder Content
@@ -97,26 +124,33 @@ class Connection:
 
                 # Request Deletes
                 for f in ft.hash_to_remove:
-                    print("Delete Request for ")
+                    print(Fore.RED + "Delete Request for ")
                     sock.sendto(("del:" + os.path.basename(f.name)).encode(), address)
                 
                 # Send Files
-                if file_amount < 1: sent = sock.sendto(self.CONNECTED.encode(), address) # No files to send
+                if file_amount < 1:
+                    sent = sock.sendto(self.CONNECTED.encode(), address) # No files to send
                 else:
                     # Send Files
                     for f in files:
-                        print("Serving " + address[0] + " - " + f.name)
+                        print(Fore.LIGHTGREEN_EX + "Serving " +
+                              Fore.YELLOW + address[0] +
+                              Fore.LIGHTGREEN_EX + " - " + f.name)
                         sock.sendto(("file:" + os.path.basename(f.name)).encode(), address)
-                        l = f.read(1024)
-                        while (l):
-                            sock.sendto(l, address)
-                            l = f.read(1024)
-                        sock.sendto(("end").encode(), address)
+                        data_read = f.read(1024)
+                        while data_read:
+                            sock.sendto(data_read, address)
+                            data_read = f.read(1024)
+                        sock.sendto("end".encode(), address)
                         f.close() 
                         
     def search(self):
-        ''' Find Global Servers'''
-        print("*Searching for servers*")
+        """
+         Find Global Servers
+        :return:
+        """
+
+        print(Fore.LIGHTBLUE_EX + "*Searching for servers*")
         server_address = ('255.255.255.255', self.port)
         servers = []
         search_interval = 2 # seconds
@@ -128,15 +162,16 @@ class Connection:
             self.send_sock.sendto(self.BROADCAST_INIT.encode(), server_address)
             data, server = self.send_sock.recvfrom(1024)
             data = data.decode('UTF-8')
-            if data.startswith('res:') and Server_Info(data[4:], server[0]) not in servers:
-                servers.append(Server_Info(data[4:], server[0]))
-                print("\t" + str(len(servers)) + " server/s found.")
-        print("")
+            if data.startswith('res:') and ServerInfo(data[4:], server[0]) not in servers:
+                servers.append(ServerInfo(data[4:], server[0]))
+                print("\t" + Fore.LIGHTWHITE_EX + str(len(servers)) + Fore.LIGHTGREEN_EX + " server/s found.")
+        print("\n")
         return servers
 
-    def clean_up(self, directory):
+    @staticmethod
+    def clean_up(directory):
         # Clear files
-        print("Purging - " + directory)
+        print(Fore.RED + "Purging - " + directory)
         try:
             for filename in os.listdir(directory):
                 os.remove(directory+"\\"+filename)
@@ -144,11 +179,18 @@ class Connection:
             pass
 
     def connect(self, ip):
-        ''' Establish a Connection to Server '''
-        self.status = "CONNECTING"
-        print("Connecting - " + ip)
+        """
+        Establish a Connection to Server
+        :param ip:
+        :return:
+        """
+
+        self.status = self.CONNECTING
+
+        print(self.status_color_mapping[self.status] + "Connecting - " + Fore.LIGHTWHITE_EX + ip)
         directory = config.CLIENT_DIR
-        # if \Example, add exact path 
+
+        # if \Example, add exact path
         if directory.startswith("\\"):
             directory = os.path.dirname(os.path.realpath(__file__)) + directory
         # Create Container Folder
@@ -160,8 +202,7 @@ class Connection:
 
         # Initialise Connection
         while True:
-            
-            print("Status: " + self.status, end="\r", flush=True)
+            print("Status: " + self.status_color_mapping[self.status] + self.status, end="\r", flush=True)
 
             # Talk to server
             self.send_sock.sendto(self.CONNECTED.encode(), (ip, self.port))
@@ -170,13 +211,15 @@ class Connection:
 
             # Idle
             if command == self.CONNECTED:
-                self.status = "IDLE     "
+                self.status = "IDLE"
 
             # Receiving File!
             elif command.startswith('file:'):
-                self.status = "RECEIVING"
+                self.status = self.RECEIVING
                 data = self.send_sock.recv(1024)
-                print("Receiving file: " + command[5:])
+                print(self.status_color_mapping[self.status] + "Receiving file: " +
+                      Fore.LIGHTWHITE_EX + command[5:])
+
                 f = open(directory+"\\"+command[5:],'wb')
                 while data:
                     try:
@@ -190,17 +233,18 @@ class Connection:
 
             # File deleted on server
             elif command.startswith('del:'):
-                self.status = "DELETING "
+                self.status = self.DELETING
                 for filename in os.listdir(directory):
-                    if File_Transfer.file_hash(directory+"\\"+filename) == command[4:]:
+                    if FileTransfer.file_hash(directory + "\\" + filename) == command[4:]:
                         try:
+                            print(self.status_color_mapping[self.status] + "Deleting file: " +
+                                  Fore.LIGHTWHITE_EX + command[4:])
                             os.remove(directory+"\\"+command[4:])
                         except Exception:
                             pass
-
             # Hmmm?
             else:
-                self.status = "ERROR"
+                self.status = self.ERROR
 
             
 con = Connection(config.PORT)
