@@ -35,7 +35,7 @@ class File_Transfer:
                 for chunk in iter(lambda: f.read(4096), b""):
                     hash_md5.update(chunk)
         # File can be deleted during this (possibly causing OS/Perm error)
-        except FileNotFoundError and OSError and PermissionError:
+        except (FileNotFoundError, OSError, PermissionError):
             return None
         return hash_md5.hexdigest()
 
@@ -96,7 +96,7 @@ class Connection:
                 file_amount = len(files)
 
                 # Request Deletes
-                for dfile in ft.hash_to_remove:
+                for f in ft.hash_to_remove:
                     print("Delete Request for ")
                     sock.sendto(("del:" + os.path.basename(f.name)).encode(), address)
                 
@@ -119,13 +119,13 @@ class Connection:
         print("*Searching for servers*")
         server_address = ('255.255.255.255', self.port)
         servers = []
-        search_interval = 2
+        search_interval = 2 # seconds
         start_time = time.time()
 
         # Search as long as interval
         while time.time() < (start_time + search_interval):
             # Query for servers - ask network for information
-            sent = self.send_sock.sendto(self.BROADCAST_INIT.encode(), server_address)
+            self.send_sock.sendto(self.BROADCAST_INIT.encode(), server_address)
             data, server = self.send_sock.recvfrom(1024)
             data = data.decode('UTF-8')
             if data.startswith('res:') and Server_Info(data[4:], server[0]) not in servers:
@@ -145,6 +145,7 @@ class Connection:
 
     def connect(self, ip):
         ''' Establish a Connection to Server '''
+        self.status = "CONNECTING"
         print("Connecting - " + ip)
         directory = config.CLIENT_DIR
         # if \Example, add exact path 
@@ -160,17 +161,20 @@ class Connection:
         # Initialise Connection
         while True:
             
+            print("Status: " + self.status, end="\r", flush=True)
+
             # Talk to server
-            sent = self.send_sock.sendto(self.CONNECTED.encode(), (ip, self.port))
+            self.send_sock.sendto(self.CONNECTED.encode(), (ip, self.port))
             data = self.send_sock.recv(1024)
             command = data.decode('UTF-8')
 
             # Idle
             if command == self.CONNECTED:
-                pass
+                self.status = "IDLE     "
 
             # Receiving File!
             elif command.startswith('file:'):
+                self.status = "RECEIVING"
                 data = self.send_sock.recv(1024)
                 print("Receiving file: " + command[5:])
                 f = open(directory+"\\"+command[5:],'wb')
@@ -186,9 +190,9 @@ class Connection:
 
             # File deleted on server
             elif command.startswith('del:'):
-                print("Delete Request")
+                self.status = "DELETING "
                 for filename in os.listdir(directory):
-                    if File_Transfer.file_hash(self.directory+"\\"+filename) == command[4:]:
+                    if File_Transfer.file_hash(directory+"\\"+filename) == command[4:]:
                         try:
                             os.remove(directory+"\\"+command[4:])
                         except Exception:
@@ -196,7 +200,7 @@ class Connection:
 
             # Hmmm?
             else:
-                print("Wtf:" + command)
+                self.status = "ERROR"
 
             
 con = Connection(config.PORT)
